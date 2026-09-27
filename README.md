@@ -74,8 +74,11 @@ integration tests (full HTTP pipeline via `WebApplicationFactory`).
 
 ## Authentication
 
-The API uses JWT bearer tokens. Two demo accounts are seeded automatically on first run
+The API uses JWT bearer tokens. 
+For local development and demonstration purposes, Two demo accounts are seeded automatically on first run
 (`SeedDemoUsersAsync` in `Program.cs`), since there is no registration endpoint:
+
+**Note:** These demo credentials are for local/demo use only and should not be used in production.
 
 | Username   | Password       | Role       |
 |------------|----------------|------------|

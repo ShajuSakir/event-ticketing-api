@@ -49,6 +49,7 @@ public class AppDbContext : DbContext
             o.Property(x => x.CustomerEmail).IsRequired().HasMaxLength(200);
             o.Property(x => x.UnitPrice).HasPrecision(10, 2);
             o.Property(x => x.TotalPrice).HasPrecision(10, 2);
+            o.HasIndex(x => x.IdempotencyKey).IsUnique().HasFilter("\"IdempotencyKey\" IS NOT NULL");
 
             o.HasOne(x => x.PricingTier)
                 .WithMany()

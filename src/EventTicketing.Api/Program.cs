@@ -53,7 +53,7 @@ builder.Services.AddSingleton<JwtTokenGenerator>();
 var jwtSection = builder.Configuration.GetSection("Jwt");
 
 var jwtSecret = jwtSection["Secret"]
-    ?? throw new InvalidOperationException("Jwt:Secret is not configured. Set it in appsettings.json or user-secrets.");
+    ?? throw new InvalidOperationException("Jwt:Secret is not configured. Set it using User Secrets or an environment variable.");
 
 builder.Services.AddAuthentication(options =>
 {

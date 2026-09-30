@@ -39,6 +39,7 @@ public class EventServiceTests : IDisposable
         return new CreateEventRequest
         {
             Name = name,
+            Description = "Unit test event",
             Venue = venue,
             Date = new DateOnly(2026, 12, 1),
             Time = new TimeOnly(20, 0),

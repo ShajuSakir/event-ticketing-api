@@ -19,7 +19,7 @@ public class TicketService : ITicketService
     }
 
     // Purchases tickets while preventing overselling using optimistic concurrency and retry handling.
-    public async Task<ServiceResult<TicketOrderResponse>> PurchaseAsync(Guid eventId, Guid userId, PurchaseTicketRequest request, CancellationToken ct = default)
+    public async Task<ServiceResult<TicketOrderResponse>> PurchaseAsync(Guid eventId, Guid userId, PurchaseTicketRequest request, string? idempotencyKey = null, CancellationToken ct = default)
     {
 
         var evt = await _db.Events.FirstOrDefaultAsync(e => e.Id == eventId, ct);
@@ -50,6 +50,38 @@ public class TicketService : ITicketService
                 $"User '{userId}' was not found.");
         }
 
+        // Idempotency:
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            var existingOrder = await _db.TicketOrders
+                .FirstOrDefaultAsync(
+                    o => o.IdempotencyKey == idempotencyKey &&
+                         o.EventId == eventId &&
+                         o.CustomerEmail == user.Email,
+                    ct);
+
+            if (existingOrder is not null)
+            {
+                var existingTier = await _db.PricingTiers
+                    .FirstOrDefaultAsync(t => t.Id == existingOrder.PricingTierId, ct);
+
+                return ServiceResult<TicketOrderResponse>.Success(
+                    new TicketOrderResponse
+                    {
+                        Id = existingOrder.Id,
+                        EventId = existingOrder.EventId,
+                        PricingTierId = existingOrder.PricingTierId,
+                        PricingTierName = existingTier?.Name ?? string.Empty,
+                        CustomerName = existingOrder.CustomerName,
+                        CustomerEmail = existingOrder.CustomerEmail,
+                        Quantity = existingOrder.Quantity,
+                        UnitPrice = existingOrder.UnitPrice,
+                        TotalPrice = existingOrder.TotalPrice,
+                        PurchasedAtUtc = existingOrder.PurchasedAtUtc
+                    });
+            }
+        }
+
         // BR - prevent overselling under concurrent purchases.
         for (var attempt = 0; attempt < MaxConcurrencyRetries; attempt++)
         {
@@ -76,6 +108,7 @@ public class TicketService : ITicketService
                 Id = Guid.NewGuid(),
                 EventId = eventId,
                 PricingTierId = tier.Id,
+                IdempotencyKey = idempotencyKey,
                 CustomerName = user.Username,
                 CustomerEmail = user.Email,
                 Quantity = request.Quantity,

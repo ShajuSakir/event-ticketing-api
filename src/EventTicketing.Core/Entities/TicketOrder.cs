@@ -16,4 +16,5 @@ public class TicketOrder
     public decimal UnitPrice { get; set; }
     public decimal TotalPrice { get; set; }
     public DateTime PurchasedAtUtc { get; set; }
+    public string? IdempotencyKey { get; set; }
 }

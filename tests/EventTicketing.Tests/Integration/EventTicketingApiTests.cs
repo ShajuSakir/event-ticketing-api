@@ -16,6 +16,9 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
         _client = factory.CreateClient();
     }
 
+   
+    // Authentication helpers  
+
     private async Task<string> LoginAsync(string username, string password)
     {
         var response = await _client.PostAsJsonAsync(
@@ -49,6 +52,77 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
         _client.DefaultRequestHeaders.Authorization = null;
     }
 
+
+    // Integration test helpers
+
+    private async Task<EventResponse> CreateEventAsAdminAsync(
+        string name,
+        int totalCapacity,
+        List<PricingTierRequest> pricingTiers,
+        string description = "Integration test event")
+    {
+        await AuthenticateAsAsync("admin", "Admin123!");
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/events",
+            new CreateEventRequest
+            {
+                Name = name,
+                Description = description,
+                Venue = "Test Arena",
+                Date = new DateOnly(2027, 6, 10),
+                Time = new TimeOnly(19, 0),
+                TotalCapacity = totalCapacity,
+                PricingTiers = pricingTiers
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var created =
+            await response.Content.ReadFromJsonAsync<EventResponse>();
+
+        created.Should().NotBeNull();
+
+        return created!;
+    }
+
+    private async Task<TicketOrderResponse> PurchaseTicketsAsync(
+        Guid eventId,
+        Guid pricingTierId,
+        int quantity,
+        string? idempotencyKey = null)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/events/{eventId}/tickets/purchase");
+
+        request.Content = JsonContent.Create(
+            new PurchaseTicketRequest
+            {
+                PricingTierId = pricingTierId,
+                Quantity = quantity
+            });
+
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            request.Headers.Add("Idempotency-Key", idempotencyKey);
+        }
+
+        var response = await _client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var order =
+            await response.Content.ReadFromJsonAsync<TicketOrderResponse>();
+
+        order.Should().NotBeNull();
+
+        return order!;
+    }
+
+
+    // Authentication / authorization
+
     [Fact]
     public async Task UnauthenticatedUser_CannotPurchaseTickets()
     {
@@ -63,65 +137,6 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
             });
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-    }
-
-    [Fact]
-    public async Task Customer_CanPurchaseTickets()
-    {
-        // create the event as admin.
-        await AuthenticateAsAsync("admin", "Admin123!");
-
-        var createResponse = await _client.PostAsJsonAsync(
-            "/api/events",
-            new CreateEventRequest
-            {
-                Name = "Customer Purchase Test",
-                Venue = "Test Arena",
-                Date = new DateOnly(2027, 5, 10),
-                Time = new TimeOnly(19, 0),
-                TotalCapacity = 10,
-                PricingTiers = new List<PricingTierRequest>
-                {
-                    new()
-                    {
-                        Name = "General",
-                        Price = 25m,
-                        Capacity = 10
-                    }
-                }
-            });
-
-        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
-
-        var created =
-            await createResponse.Content.ReadFromJsonAsync<EventResponse>();
-
-        created.Should().NotBeNull();
-
-        var tierId = created!.PricingTiers[0].Id;
-
-        // purchase as customer.
-        await AuthenticateAsAsync("customer", "Customer123!");
-
-        var purchaseResponse = await _client.PostAsJsonAsync(
-            $"/api/events/{created.Id}/tickets/purchase",
-            new PurchaseTicketRequest
-            {
-                PricingTierId = tierId,
-                Quantity = 2
-            });
-
-        purchaseResponse.StatusCode.Should().Be(HttpStatusCode.Created);
-
-        var order =
-            await purchaseResponse.Content.ReadFromJsonAsync<TicketOrderResponse>();
-
-        order.Should().NotBeNull();
-        order!.Quantity.Should().Be(2);
-        order.TotalPrice.Should().Be(50m);
-
-        order.CustomerName.Should().Be("customer");
-        order.CustomerEmail.Should().Be("customer@example.com");
     }
 
     [Fact]
@@ -155,41 +170,27 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
     [Fact]
     public async Task Admin_CanCreateEvent()
     {
-        await AuthenticateAsAsync("admin", "Admin123!");
-
-        var response = await _client.PostAsJsonAsync(
-            "/api/events",
-            new CreateEventRequest
+        var created = await CreateEventAsAdminAsync(
+            "Admin Created Event",
+            100,
+            new List<PricingTierRequest>
             {
-                Name = "Admin Created Event",
-                Venue = "Convention Center",
-                Date = new DateOnly(2027, 7, 10),
-                Time = new TimeOnly(19, 0),
-                TotalCapacity = 100,
-                PricingTiers = new List<PricingTierRequest>
+                new()
                 {
-                    new()
-                    {
-                        Name = "General",
-                        Price = 50m,
-                        Capacity = 80
-                    },
-                    new()
-                    {
-                        Name = "VIP",
-                        Price = 150m,
-                        Capacity = 20
-                    }
+                    Name = "General",
+                    Price = 50m,
+                    Capacity = 80
+                },
+                new()
+                {
+                    Name = "VIP",
+                    Price = 150m,
+                    Capacity = 20
                 }
-            });
+            }, 
+            "Admin created integration test event");
 
-        response.StatusCode.Should().Be(HttpStatusCode.Created);
-
-        var created =
-            await response.Content.ReadFromJsonAsync<EventResponse>();
-
-        created.Should().NotBeNull();
-        created!.Name.Should().Be("Admin Created Event");
+        created.Name.Should().Be("Admin Created Event");
     }
 
     [Fact]
@@ -227,21 +228,139 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
         summaries.Should().NotBeNull();
     }
 
+
+    // Ticket purchasing
+
+    [Fact]
+    public async Task Customer_CanPurchaseTickets()
+    {
+        var created = await CreateEventAsAdminAsync(
+            "Customer Purchase Test",
+            10,
+            new List<PricingTierRequest>
+            {
+                new()
+                {
+                    Name = "General",
+                    Price = 25m,
+                    Capacity = 10
+                }
+            },
+            "Customer purchase integration test event");
+
+        var tierId = created.PricingTiers[0].Id;
+
+        await AuthenticateAsAsync("customer", "Customer123!");
+
+        var order = await PurchaseTicketsAsync(
+            created.Id,
+            tierId,
+            2);
+
+        order.Quantity.Should().Be(2);
+        order.TotalPrice.Should().Be(50m);
+        order.CustomerName.Should().Be("customer");
+        order.CustomerEmail.Should().Be("customer@example.com");
+    }
+
+    [Fact]
+    public async Task Purchase_ReturnsConflict_WhenOversellingAttempted()
+    {
+        var created = await CreateEventAsAdminAsync(
+            "Small Venue Show",
+            2,
+            new List<PricingTierRequest>
+            {
+                new()
+                {
+                    Name = "GA",
+                    Price = 15m,
+                    Capacity = 2
+                }
+            },
+            "Idempotency integration test event");
+
+        var tierId = created.PricingTiers[0].Id;
+
+        await AuthenticateAsAsync("customer", "Customer123!");
+
+        var response =
+            await _client.PostAsJsonAsync(
+                $"/api/events/{created.Id}/tickets/purchase",
+                new PurchaseTicketRequest
+                {
+                    PricingTierId = tierId,
+                    Quantity = 5
+                });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Customer_RepeatingSameIdempotencyKey_ReturnsSameOrder()
+    {
+        var created = await CreateEventAsAdminAsync(
+            "Idempotency Test",
+            10,
+            new List<PricingTierRequest>
+            {
+                new()
+                {
+                    Name = "General",
+                    Price = 25m,
+                    Capacity = 10
+                }
+            },
+            "Idempotency integration test event");
+
+        var tierId = created.PricingTiers[0].Id;
+
+        await AuthenticateAsAsync("customer", "Customer123!");
+
+        var idempotencyKey = Guid.NewGuid().ToString();
+
+        var firstOrder = await PurchaseTicketsAsync(
+            created.Id,
+            tierId,
+            2,
+            idempotencyKey);
+
+        var secondOrder = await PurchaseTicketsAsync(
+            created.Id,
+            tierId,
+            2,
+            idempotencyKey);
+
+        // Same idempotency key should return the original order.
+        secondOrder.Id.Should().Be(firstOrder.Id);
+        secondOrder.Quantity.Should().Be(firstOrder.Quantity);
+        secondOrder.TotalPrice.Should().Be(firstOrder.TotalPrice);
+
+        // The retry must not consume another 2 tickets.
+        var availabilityResponse =
+            await _client.GetAsync(
+                $"/api/events/{created.Id}/tickets/availability");
+
+        availabilityResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var availability =
+            await availabilityResponse.Content
+                .ReadFromJsonAsync<TicketAvailabilityResponse>();
+
+        availability.Should().NotBeNull();
+        availability!.TotalSold.Should().Be(2);
+    }
+
+
+    // End-to-end flow
+
     [Fact]
     public async Task FullFlow_CreateEvent_PurchaseTickets_ViewReport()
     {
-        // admin creates the event.
-        await AuthenticateAsAsync("admin", "Admin123!");
-
-        var createRequest = new CreateEventRequest
-        {
-            Name = "Integration Test Concert",
-            Description = "End-to-end test event",
-            Venue = "Test Arena",
-            Date = new DateOnly(2027, 1, 15),
-            Time = new TimeOnly(19, 30),
-            TotalCapacity = 50,
-            PricingTiers = new List<PricingTierRequest>
+        var created = await CreateEventAsAdminAsync(
+            "Integration Test Concert",
+            50,
+            new List<PricingTierRequest>
             {
                 new()
                 {
@@ -255,48 +374,24 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
                     Price = 120m,
                     Capacity = 10
                 }
-            }
-        };
-
-        var createResponse =
-            await _client.PostAsJsonAsync(
-                "/api/events",
-                createRequest);
-
-        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
-
-        var created =
-            await createResponse.Content.ReadFromJsonAsync<EventResponse>();
-
-        created.Should().NotBeNull();
+            },
+            "End-to-end test event");
 
         var standardTierId =
-            created!.PricingTiers
+            created.PricingTiers
                 .First(t => t.Name == "Standard")
                 .Id;
 
-        // customer purchases tickets.
         await AuthenticateAsAsync("customer", "Customer123!");
 
-        var purchaseResponse =
-            await _client.PostAsJsonAsync(
-                $"/api/events/{created.Id}/tickets/purchase",
-                new PurchaseTicketRequest
-                {
-                    PricingTierId = standardTierId,
-                    Quantity = 3
-                });
+        var order = await PurchaseTicketsAsync(
+            created.Id,
+            standardTierId,
+            3);
 
-        purchaseResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        order.TotalPrice.Should().Be(120m);
 
-        var order =
-            await purchaseResponse.Content
-                .ReadFromJsonAsync<TicketOrderResponse>();
-
-        order.Should().NotBeNull();
-        order!.TotalPrice.Should().Be(120m);
-
-        // availability is public.
+        // Availability is public.
         var availabilityResponse =
             await _client.GetAsync(
                 $"/api/events/{created.Id}/tickets/availability");
@@ -310,7 +405,7 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
         availability.Should().NotBeNull();
         availability!.TotalSold.Should().Be(3);
 
-        // sales report requires admin.
+        // Sales report requires admin.
         await AuthenticateAsAsync("admin", "Admin123!");
 
         var reportResponse =
@@ -328,59 +423,8 @@ public class EventTicketingApiTests : IClassFixture<CustomWebApplicationFactory>
         summary.OrderCount.Should().Be(1);
     }
 
-    [Fact]
-    public async Task Purchase_ReturnsConflict_WhenOversellingAttempted()
-    {
-        // create event as admin.
-        await AuthenticateAsAsync("admin", "Admin123!");
 
-        var createRequest = new CreateEventRequest
-        {
-            Name = "Small Venue Show",
-            Venue = "Tiny Room",
-            Date = new DateOnly(2027, 2, 1),
-            Time = new TimeOnly(20, 0),
-            TotalCapacity = 2,
-            PricingTiers = new List<PricingTierRequest>
-            {
-                new()
-                {
-                    Name = "GA",
-                    Price = 15m,
-                    Capacity = 2
-                }
-            }
-        };
-
-        var createResponse =
-            await _client.PostAsJsonAsync(
-                "/api/events",
-                createRequest);
-
-        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
-
-        var created =
-            await createResponse.Content
-                .ReadFromJsonAsync<EventResponse>();
-
-        created.Should().NotBeNull();
-
-        var tierId = created!.PricingTiers[0].Id;
-
-        // purchase as customer.
-        await AuthenticateAsAsync("customer", "Customer123!");
-
-        var purchaseResponse =
-            await _client.PostAsJsonAsync(
-                $"/api/events/{created.Id}/tickets/purchase",
-                new PurchaseTicketRequest
-                {
-                    PricingTierId = tierId,
-                    Quantity = 5
-                });
-
-        purchaseResponse.StatusCode.Should().Be(HttpStatusCode.Conflict);
-    }
+    // Event / validation
 
     [Fact]
     public async Task GetEvent_ReturnsNotFound_ForUnknownId()

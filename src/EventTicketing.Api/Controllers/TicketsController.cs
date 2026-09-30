@@ -24,14 +24,14 @@ public class TicketsController : ControllerBase
     [ProducesResponseType(typeof(TicketOrderResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> Purchase(Guid eventId, [FromBody] PurchaseTicketRequest request, CancellationToken ct)
+    public async Task<IActionResult> Purchase(Guid eventId, [FromBody] PurchaseTicketRequest request, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         if (!Guid.TryParse(userIdClaim, out var userId))
-            return Unauthorized();
+            return Unauthorized();       
 
-        var result = await _ticketService.PurchaseAsync(eventId, userId, request, ct);
+        var result = await _ticketService.PurchaseAsync(eventId, userId, request, idempotencyKey, ct);
         if (!result.IsSuccess)
             return result.ToActionResult(this);
 

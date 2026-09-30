@@ -56,7 +56,7 @@ The database schema is created automatically at startup via `Database.EnsureCrea
 (no manual migration step needed for local/dev use). Swagger UI opens automatically at:
 
 ```
-http://localhost:5081/swagger
+https://localhost:5081/swagger
 ```
 
 > **Switching to EF Core Migrations:** for production or CI pipelines with schema history
@@ -163,10 +163,20 @@ POST /api/events
 | POST   | `/api/events/{eventId}/tickets/purchase`        | Requires authentication (any role). Purchase tickets from a pricing tier |
 | GET    | `/api/events/{eventId}/tickets/availability`     | View remaining capacity per tier |
 
+
+### Idempotency
+
+The purchase endpoint optionally supports an `Idempotency-Key` header.
+
+If the same key is sent again for the same customer and event, the API returns the existing order instead of creating another purchase.
+
 **Purchase example:**
 
-```json
+```http
 POST /api/events/{eventId}/tickets/purchase
+Idempotency-Key: purchase-123
+Content-Type: application/json
+
 {
   "pricingTierId": "...",
   "quantity": 2
